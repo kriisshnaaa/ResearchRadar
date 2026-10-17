@@ -1,0 +1,6 @@
+requests>=2.31,<3
+python-dotenv>=1.0,<2
+feedparser>=6.0,<7
+google-genai>=1.0,<2
+sentence-transformers>=3.0,<6
+pytest>=8,<9
