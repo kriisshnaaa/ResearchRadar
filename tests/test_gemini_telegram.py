@@ -2,7 +2,12 @@ from types import SimpleNamespace
 
 import pytest
 
-from researchradar.delivery.telegram import TelegramDelivery, TelegramDeliveryError, split_message
+from researchradar.delivery.telegram import (
+    TelegramDelivery,
+    TelegramDeliveryError,
+    _sanitize_html,
+    split_message,
+)
 from researchradar.models import Record
 from researchradar.summarization.gemini_client import GeminiSummarizer, GeminiError
 
@@ -16,9 +21,9 @@ def test_gemini_uses_only_evidence_and_rejects_bad_url():
     class Models:
         def generate_content(self, **kwargs):
             assert "https://arxiv.org/abs/1" in kwargs["contents"]
-            assert "QUICK TAKE" in kwargs["contents"]
-            assert "KEY UPDATES" in kwargs["contents"]
-            assert "under 2500 characters" in kwargs["contents"]
+            assert "RESEARCH TOPIC" in kwargs["contents"]
+            assert "WHAT'S HAPPENING" in kwargs["contents"]
+            assert "2500 characters" in kwargs["contents"]
             return SimpleNamespace(text="Summary based on evidence. Sources: https://arxiv.org/abs/1")
     result = GeminiSummarizer("key", "model", client=SimpleNamespace(models=Models())).summarize("RAG", [record()])
     assert "Summary" in result.text
@@ -43,11 +48,19 @@ def test_telegram_splits_and_confirms_response():
             return {"ok": True, "result": {"message_id": 1}}
     def post(url, **kwargs):
         assert "key" in url and kwargs["json"]["chat_id"] == "chat"
+        assert kwargs["json"]["parse_mode"] == "HTML"
         sent.append(kwargs["json"]["text"])
         return Response()
     delivery = TelegramDelivery("key", "chat", max_chars=100, post=post)
     assert delivery.send("paragraph\n\n" + ("word " * 100)) > 1
     assert all(len(part) <= 100 for part in sent)
+
+
+def test_telegram_sanitizes_html_without_removing_supported_formatting():
+    text = '<b>News & updates</b> <a href="https://example.com?a=1&b=2">source</a>'
+    sanitized = _sanitize_html(text)
+    assert sanitized == '<b>News &amp; updates</b> <a href="https://example.com?a=1&b=2">source</a>'
+    assert "<script>" not in _sanitize_html("<script>alert(1)</script>")
 
 
 def test_telegram_api_error():

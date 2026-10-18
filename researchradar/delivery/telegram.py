@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import time
+import html
+import re
 from typing import Any
 
 import requests
@@ -53,7 +55,7 @@ class TelegramDelivery:
     def send(self, text: str) -> int:
         if not self.token or not self.chat_id:
             raise TelegramDeliveryError("TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID are required")
-        parts = split_message(text, self.max_chars)
+        parts = split_message(_sanitize_html(text), self.max_chars)
         if not parts:
             raise TelegramDeliveryError("cannot send an empty digest")
         for part in parts:
@@ -65,7 +67,13 @@ class TelegramDelivery:
         endpoint = f"https://api.telegram.org/bot{self.token}/sendMessage"
         for attempt in range(self.retries + 1):
             try:
-                response = self.post(endpoint, json={"chat_id": self.chat_id, "text": part},
+                response = self.post(
+                    endpoint,
+                    json={
+                        "chat_id": self.chat_id,
+                        "text": part,
+                        "parse_mode": "HTML",
+                    },
                                      timeout=self.timeout)
                 payload = response.json()
                 if response.status_code == 429 and attempt < self.retries:
@@ -91,3 +99,31 @@ def _retry_after(payload: Any) -> float:
         return min(float(payload["parameters"]["retry_after"]), 10)
     except (KeyError, TypeError, ValueError):
         return 1.0
+
+
+_ALLOWED_TAGS = {"b", "i", "u", "s", "code", "pre", "a"}
+_TAG_PATTERN = re.compile(r"(<\/?[a-zA-Z][^>]*>)")
+
+
+def _sanitize_html(text: str) -> str:
+    """Escape dynamic text while preserving Telegram's supported safe tags."""
+    chunks: list[str] = []
+    position = 0
+    for match in _TAG_PATTERN.finditer(text):
+        chunks.append(html.escape(text[position:match.start()], quote=False))
+        tag = match.group(1)
+        tag_name_match = re.match(r"</?\s*([a-zA-Z]+)", tag)
+        tag_name = tag_name_match.group(1).lower() if tag_name_match else ""
+        if tag_name in _ALLOWED_TAGS and _valid_tag(tag, tag_name):
+            chunks.append(tag)
+        else:
+            chunks.append(html.escape(tag, quote=False))
+        position = match.end()
+    chunks.append(html.escape(text[position:], quote=False))
+    return "".join(chunks)
+
+
+def _valid_tag(tag: str, tag_name: str) -> bool:
+    if tag_name != "a":
+        return tag in {f"<{tag_name}>", f"</{tag_name}>"}
+    return bool(re.fullmatch(r'<a\s+href="https?://[^"]+">', tag, re.IGNORECASE)) or tag == "</a>"
